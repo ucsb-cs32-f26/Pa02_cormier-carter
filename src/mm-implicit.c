@@ -1,9 +1,6 @@
 /*
  * mm-implicit.c - The best malloc package EVAR!
  *
- * TODO (bug): mm_realloc and mm_calloc don't seem to be working...
- * TODO (bug): The allocator doesn't re-use space very well...
- *
  * This is the only file you edit and submit. Every function below has a
  * comment describing what it does. Work through the checkpoints in the
  * writeup in order:
@@ -121,13 +118,25 @@ static block_t *block_from_payload(void *ptr) {
 /**
  * coalesce_free_blocks - Merges adjacent free blocks in the heap into
  *      single, larger free blocks. (Checkpoint 3)
- *
- * __attribute__((unused)) stops the compiler from warning that this
- * function is never called. You can remove it once you call it.
  */
-__attribute__((unused))
 static void coalesce_free_blocks(void) {
-    // TODO (Checkpoint 3)
+    if (mm_heap_first == NULL) {
+        return;
+    }
+
+    block_t *curr = mm_heap_first;
+    while (curr != mm_heap_last) {
+        block_t *next = (void *) curr + get_size(curr);
+        if (!is_allocated(curr) && !is_allocated(next)) {
+            set_header(curr, get_size(curr) + get_size(next), false);
+            if (next == mm_heap_last) {
+                mm_heap_last = curr;
+            }
+            // Stay here so a run of three or more free blocks merges fully.
+        } else {
+            curr = next;
+        }
+    }
 }
 
 
@@ -161,13 +170,30 @@ bool mm_init(void) {
  * allocated block. Returns NULL if the heap cannot grow.
  */
 void *mm_malloc(size_t size) {
+    // Leave room for the header and alignment without wrapping around.
+    if (size > SIZE_MAX - sizeof(block_t) - (ALIGNMENT - 1)) {
+        return NULL;
+    }
+
     // The block must have enough space for a header and be 16-byte aligned
     size = round_up(sizeof(block_t) + size, ALIGNMENT);
 
-    // If there is a large enough free block, use it
+    // Merge neighboring free blocks before looking for a fit.
+    coalesce_free_blocks();
     block_t *block = find_fit(size);
     if (block != NULL) {
-        set_header(block, get_size(block), true);
+        size_t remaining_size = get_size(block) - size;
+        // The remainder needs room for its own aligned block.
+        if (remaining_size >= ALIGNMENT) {
+            block_t *remainder = (void *) block + size;
+            set_header(remainder, remaining_size, false);
+            set_header(block, size, true);
+            if (block == mm_heap_last) {
+                mm_heap_last = remainder;
+            }
+        } else {
+            set_header(block, get_size(block), true);
+        }
         return block->payload;
     }
 
@@ -216,9 +242,28 @@ void mm_free(void *ptr) {
  * If size is 0, behaves like mm_free(old_ptr) and returns NULL.
  */
 void *mm_realloc(void *old_ptr, size_t size) {
-    (void) old_ptr;
-    (void) size;
-    return NULL;
+    if (size == 0) {
+        mm_free(old_ptr);
+        return NULL;
+    }
+    if (old_ptr == NULL) {
+        return mm_malloc(size);
+    }
+
+    void *new_ptr = mm_malloc(size);
+    if (new_ptr == NULL) {
+        // A failed realloc must leave the old allocation usable.
+        return NULL;
+    }
+
+    block_t *old_block = block_from_payload(old_ptr);
+    size_t copy_size = get_size(old_block) - sizeof(block_t);
+    if (size < copy_size) {
+        copy_size = size;
+    }
+    memcpy(new_ptr, old_ptr, copy_size);
+    mm_free(old_ptr);
+    return new_ptr;
 }
 
 /**
@@ -228,9 +273,18 @@ void *mm_realloc(void *old_ptr, size_t size) {
  * byte set to 0, and returns a pointer to it.
  */
 void *mm_calloc(size_t nmemb, size_t size) {
-    (void) nmemb;
-    (void) size;
-    return NULL;
+    // Check before multiplying so a large array cannot wrap to a small size.
+    if (nmemb != 0 && size > SIZE_MAX / nmemb) {
+        return NULL;
+    }
+
+    size_t total_size = nmemb * size;
+    void *ptr = mm_malloc(total_size);
+    if (ptr == NULL) {
+        return NULL;
+    }
+    memset(ptr, 0, total_size);
+    return ptr;
 }
 
 /**
