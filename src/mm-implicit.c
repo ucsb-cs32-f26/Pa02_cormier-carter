@@ -171,7 +171,18 @@ void *mm_malloc(size_t size) {
     // If there is a large enough free block, use it
     block_t *block = find_fit(size);
     if (block != NULL) {
-        set_header(block, get_size(block), true);
+        size_t remaining_size = get_size(block) - size;
+        // The remainder needs room for its own aligned block.
+        if (remaining_size >= ALIGNMENT) {
+            block_t *remainder = (void *) block + size;
+            set_header(remainder, remaining_size, false);
+            set_header(block, size, true);
+            if (block == mm_heap_last) {
+                mm_heap_last = remainder;
+            }
+        } else {
+            set_header(block, get_size(block), true);
+        }
         return block->payload;
     }
 
