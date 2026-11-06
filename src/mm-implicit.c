@@ -1,7 +1,6 @@
 /*
  * mm-implicit.c - The best malloc package EVAR!
  *
- * TODO (bug): mm_realloc and mm_calloc don't seem to be working...
  * TODO (bug): The allocator doesn't re-use space very well...
  *
  * This is the only file you edit and submit. Every function below has a
@@ -161,6 +160,11 @@ bool mm_init(void) {
  * allocated block. Returns NULL if the heap cannot grow.
  */
 void *mm_malloc(size_t size) {
+    // Leave room for the header and alignment without wrapping around.
+    if (size > SIZE_MAX - sizeof(block_t) - (ALIGNMENT - 1)) {
+        return NULL;
+    }
+
     // The block must have enough space for a header and be 16-byte aligned
     size = round_up(sizeof(block_t) + size, ALIGNMENT);
 
@@ -216,9 +220,28 @@ void mm_free(void *ptr) {
  * If size is 0, behaves like mm_free(old_ptr) and returns NULL.
  */
 void *mm_realloc(void *old_ptr, size_t size) {
-    (void) old_ptr;
-    (void) size;
-    return NULL;
+    if (size == 0) {
+        mm_free(old_ptr);
+        return NULL;
+    }
+    if (old_ptr == NULL) {
+        return mm_malloc(size);
+    }
+
+    void *new_ptr = mm_malloc(size);
+    if (new_ptr == NULL) {
+        // A failed realloc must leave the old allocation usable.
+        return NULL;
+    }
+
+    block_t *old_block = block_from_payload(old_ptr);
+    size_t copy_size = get_size(old_block) - sizeof(block_t);
+    if (size < copy_size) {
+        copy_size = size;
+    }
+    memcpy(new_ptr, old_ptr, copy_size);
+    mm_free(old_ptr);
+    return new_ptr;
 }
 
 /**
@@ -228,9 +251,18 @@ void *mm_realloc(void *old_ptr, size_t size) {
  * byte set to 0, and returns a pointer to it.
  */
 void *mm_calloc(size_t nmemb, size_t size) {
-    (void) nmemb;
-    (void) size;
-    return NULL;
+    // Check before multiplying so a large array cannot wrap to a small size.
+    if (nmemb != 0 && size > SIZE_MAX / nmemb) {
+        return NULL;
+    }
+
+    size_t total_size = nmemb * size;
+    void *ptr = mm_malloc(total_size);
+    if (ptr == NULL) {
+        return NULL;
+    }
+    memset(ptr, 0, total_size);
+    return ptr;
 }
 
 /**
